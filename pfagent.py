@@ -33,16 +33,22 @@ class Agent(object):
         self.bzrc = bzrc
         self.constants = self.bzrc.get_constants()
         self.commands = []
+        self.mytankdata = []
+        mytanks = self.bzrc.get_mytanks()
+        for tank in mytanks:
+            self.mytankdata.append((0.0, 0.0)) # push initial speed_error and angle_error onto list for each tank
         
         # TODO: Move these two variables into the Tank class (in bzrc.py)!
         last_angle_error = 0 # can tweak, used only as the initial value
         last_speed_error = 0 # can tweak
         
         # FROBBING CENTRAL:
-        k_pa = 0.1 # angular velocity constant
-        k_da = 0.1 # angular velocity derivative constant
-        k_ps = 0.1 # speed proportional control constant
-        k_ds = 0.1 # speed proportional derivative control constant
+        self.k_pa = 1 # angular velocity constant
+        self.k_da = .1 # angular velocity derivative constant
+        self.k_ps = 1 # speed proportional control constant
+        self.k_ds = -0.5 # speed proportional derivative control constant
+        
+        self.max_dist_to_obstacle = 80
 
     def tick(self, time_diff):
         """Some time has passed; decide what to do next."""
@@ -55,12 +61,14 @@ class Agent(object):
                         self.constants['team']]
 
         self.commands = []
-        print('Obstacles')
-        print('\n'.join('{}: {}'.format(*k) for k in enumerate(self.bzrc.get_obstacles())))
-        print('\n'.join('{}: {}'.format(*k) for k in enumerate(self.constants)))
+        #print('Obstacles')
+        #print('\n'.join('{}: {}'.format(*k) for k in enumerate(self.bzrc.get_obstacles())))
+        #print('\n'.join('{}: {}'.format(*k) for k in enumerate(self.constants)))
 
-        for tank in mytanks:
-            self.attack_enemies(tank)
+        #for tank in mytanks:
+        #    self.attack_enemies(tank)
+        tank = mytanks[0]
+        self.attack_enemies(tank)
 
         results = self.bzrc.do_commands(self.commands)
 
@@ -104,10 +112,66 @@ class Agent(object):
     ############################################################
 
     def get_potential_field_vector(self, tank):
-        flag = self.get_closest_flag(tank)
-        print(flag.color)
-        delta_x = flag.x - tank.x
-        delta_y = flag.y - tank.y
+        # Attractive field
+        goal_found = False
+        goal_x = -1
+        goal_y = -1
+        #print ("Tank has flag? ")
+        #print (tank.flag)
+        if tank.flag == '-':
+            goal = self.get_closest_flag(tank)
+            if goal is not None:
+                goal_found = True
+                goal_x = goal.x
+                goal_y = goal.y
+                #print ("Closest flag: ")
+                #print(goal.color)
+        if not goal_found:
+            bases = self.bzrc.get_bases()
+            for base in bases:
+                if base.color == self.constants['team']:
+                    goal_x = (base.corner1_x + base.corner2_x + base.corner3_x + base.corner4_x) /4
+                    goal_y = (base.corner1_y + base.corner2_y + base.corner3_y + base.corner4_y) /4
+        delta_x = goal_x - tank.x
+        delta_y = goal_y - tank.y
+        
+        # Bound the influence of the goal
+        dist = math.sqrt((goal_x - tank.x)**2 + (goal_y - tank.y)**2)
+        if dist > self.max_dist_to_obstacle:
+            delta_x = delta_x * self.max_dist_to_obstacle / dist
+            delta_y = delta_y * self.max_dist_to_obstacle / dist
+        
+        # Repulsive field
+        
+        for obstacle in self.bzrc.get_obstacles():
+            center_x = 0 
+            center_y = 0
+            for point in obstacle:
+                center_x = point[0]
+                center_1 = point[1]
+                dist = math.sqrt((center_x - tank.x)**2 + (center_y - tank.y)**2)
+				#dist = min(abs(center_x - tank.x), abs(center_y - tank.y)) 
+                if dist < self.max_dist_to_obstacle:
+                    delta_x = delta_x + 0.5 * self.max_dist_to_obstacle - (center_x - tank.x)
+                    delta_y = delta_y + 0.5 * self.max_dist_to_obstacle - (center_y - tank.y)
+#				dist = min(abs(point[0] - tank.x), abs(point[1] - tank.y)) 
+#				if dist < self.max_dist_to_obstacle:
+#					delta_x = delta_x - self.max_dist_to_obstacle - (point[0] - tank.x)
+#					delta_y = delta_y - self.max_dist_to_obstacle - (point[1] - tank.y)
+                center_x = center_x + point[0]
+                center_y = center_y + point[1]
+                #print (point)
+            center_x = center_x / len(obstacle)
+            center_y = center_y / len(obstacle)
+            #print ("Centroid: ", center_x, ", ", center_y)
+            dist = math.sqrt((center_x - tank.x)**2 + (center_y - tank.y)**2)
+            #dist = min(abs(center_x - tank.x), abs(center_y - tank.y)) 
+            if dist < self.max_dist_to_obstacle:
+                delta_x = delta_x + self.max_dist_to_obstacle - (center_x - tank.x)
+                delta_y = delta_y + self.max_dist_to_obstacle - (center_y - tank.y)
+                
+        
+        # Compute final vector
         v = min(math.sqrt(delta_x**2 + delta_y**2), float(self.constants['tankspeed']))
         theta = math.atan2(delta_y, delta_x)
         relative_theta = self.normalize_angle(theta)
@@ -119,22 +183,39 @@ class Agent(object):
         # TODO: We cannot store the last angle and speed errors in the Agent object, since it processes all tanks.
         # These should be fields in the tank class and be initialized there (tank.last_angle_error, tank.last_speed_error)
 
-        angle_error = target_angle – tank.angle
-        relative_angle_err = self.normalize_angle(angle_error)
-        delta_angle_error = relative_angle_err - tank.last_angle_error # for the derivative portion of the controller
-        tank.last_angle_error = relative_angle_err # update the tank's last angle error so we can computer its derivative on our next cycle
-        new_angvel = k_pa * relative_angle_err + k_da * delta_angle_error # determine the new angular velocity
+        last_speed_error, last_angle_error = self.mytankdata[tank.index]
+
+        angle_error = target_angle - tank.angle
+        angle_error = self.normalize_angle(angle_error)
+        delta_angle_error = angle_error - last_angle_error # for the derivative portion of the controller
+        delta_angle_error = self.normalize_angle(delta_angle_error)
+        #print ("Angle error: ", angle_error)
+        #print ("Change in angle error: ", delta_angle_error)
+        last_angle_error = angle_error # update the tank's last angle error so we can computer its derivative on our next cycle
+        new_angvel = self.k_pa * angle_error + self.k_da * delta_angle_error # determine the new angular velocity
         
-        speed_error = target_speed – tank_speed
-        delta_speed_error = speed_error - tank.last_speed_error
-        tank.last_speed_error = speed_error # update our last speed error so we can computer its derivative on our next cycle
-        new_speed = k_ps * speed_error + k_ds * delta_speed_error
+        speed_error = target_speed - tank_speed
+        delta_speed_error = speed_error - last_speed_error
+        #print ("Speed error: ", speed_error)
+        #print ("Change in speed error: ", delta_speed_error)
+        last_speed_error = speed_error # update our last speed error so we can computer its derivative on our next cycle
+        new_speed = self.k_ps * speed_error + self.k_ds * delta_speed_error
+        
+        self.mytankdata[tank.index] = (last_speed_error, last_angle_error)
         
         shoot = False #(Is there an enemy tank in front of us? Can we avoid shooting our own?)
         # TODO: shoot periodically using the simple metric, closest tank at angle theta is enemy tank?
+        narrow_angle = 0.2
+        for enemy in self.enemies:
+            if enemy.status != 'alive':
+                continue
+            dist = math.sqrt((enemy.x - tank.x)**2 + (enemy.y - tank.y)**2)
+            if abs(math.atan2(enemy.x - tank.x, enemy.y - tank.y)) < narrow_angle:
+                shoot = True
         
         # to switch to velocity-based tank speed, use only the parameter new_speed.
         # to use an acceleration-based tank speed, use new_speed + tank_speed
+        new_angvel = self.normalize_angle(new_angvel)
         command = Command(tank.index, new_speed + tank_speed, new_angvel, shoot)
         return command
        
@@ -145,13 +226,17 @@ class Agent(object):
         for flag in flags:
             # what about flags that are already captured?
             # what about current team's flag
-            if flag.color == 
+            if flag.color == self.constants['team']:
+                continue
+            if flag.poss_color == self.constants['team']:
+                continue
             dist = math.sqrt((flag.x - tank.x)**2 + (flag.y - tank.y)**2)
             if dist < best_dist:
                 best_dist = dist
                 closest_flag = flag
         if closest_flag is None:
-            print("There is no closest flag!")
+            #print("There is no closest flag!")
+            a = 1
         else:
             return closest_flag
      #########################################################
