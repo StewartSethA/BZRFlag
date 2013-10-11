@@ -33,6 +33,14 @@ class Agent(object):
         self.bzrc = bzrc
         self.constants = self.bzrc.get_constants()
         self.commands = []
+        
+        # FROBBING CENTRAL:
+        last_angle_error = 0 # can tweak, used only as the initial value
+        last_speed_error = 0 # can tweak
+        k_pa = 0.1 # angular velocity constant
+        k_da = 0.1 # angular velocity derivative constant
+        k_ps = 0.1 # speed proportional control constant
+        k_ds = 0.1 # speed proportional derivative control constant
 
     def tick(self, time_diff):
         """Some time has passed; decide what to do next."""
@@ -103,13 +111,29 @@ class Agent(object):
         relative_theta = self.normalize_angle(theta)
         return (v, relative_theta) # v is goal vector of velocity and relative_theta is goal angle
         
-    def pd_controller_move(self, tank, v, theta):
+    def pd_controller_move(self, tank, target_speed, target_angle):
         tank_speed = math.sqrt(tank.vx**2 + tank.vy**2)
-        speed_err = v - tank_speed
-        angle_err = theta - tank.angle
-        relative_angle_err = self.normalize_angle(angle_err)
-        k_p = 0.5
-        command = Command(tank.index, k_p * speed_err + tank_speed, k_p * relative_angle_err, False)
+
+        # TODO: We cannot store the last angle and speed errors in the Agent object, since it processes all tanks.
+        # These should be fields in the tank class and be initialized there (tank.last_angle_error, tank.last_speed_error)
+
+        angle_error = target_angle – tank.angle
+        relative_angle_err = self.normalize_angle(angle_error)
+        delta_angle_error = relative_angle_err - tank.last_angle_error # for the derivative portion of the controller
+        tank.last_angle_error = relative_angle_err # update the tank's last angle error so we can computer its derivative on our next cycle
+        new_angvel = k_pa * relative_angle_err + k_da * delta_angle_error # determine the new angular velocity
+        
+        speed_error = target_speed – tank_speed
+        delta_speed_error = speed_error - tank.last_speed_error
+        tank.last_speed_error = speed_error # update our last speed error so we can computer its derivative on our next cycle
+        new_speed = k_ps * speed_error + k_ds * delta_speed_error
+        
+        shoot = False #(Is there an enemy tank in front of us? Can we avoid shooting our own?)
+        # TODO: shoot periodically using the simple metric, closest tank at angle theta is enemy tank?
+        
+        # to switch to velocity-based tank speed, use only the parameter new_speed.
+        # to use an acceleration-based tank speed, use new_speed + tank_speed
+        command = Command(tank.index, new_speed + tank_speed, new_angvel, shoot)
         return command
        
     def get_closest_flag(self, tank):
