@@ -34,9 +34,11 @@ class Agent(object):
         self.constants = self.bzrc.get_constants()
         self.commands = []
         
-        # FROBBING CENTRAL:
+        # TODO: Move these two variables into the Tank class (in bzrc.py)!
         last_angle_error = 0 # can tweak, used only as the initial value
         last_speed_error = 0 # can tweak
+        
+        # FROBBING CENTRAL:
         k_pa = 0.1 # angular velocity constant
         k_da = 0.1 # angular velocity derivative constant
         k_ps = 0.1 # speed proportional control constant
