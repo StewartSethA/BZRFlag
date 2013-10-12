@@ -1,15 +1,11 @@
 #!/usr/bin/python -tt
 
-# An incredibly simple agent.  All we do is find the closest enemy tank, drive
-# towards it, and shoot.  Note that if friendly fire is allowed, you will very
-# often kill your own tanks with this code.
+# A Potential Field-following agent that uses a PD controller to minimize
+# the error between the direction of the field and its own movement.
 
 #################################################################
-# NOTE TO STUDENTS
-# This is a starting point for you.  You will need to greatly
-# modify this code if you want to do anything useful.  But this
-# should help you to know how to interact with BZRC in order to
-# get the information you need.
+# Seth Stewart and Stephen Clarkson
+# October 2013
 #
 # After starting the bzrflag server, this is one way to start
 # this code:
@@ -61,36 +57,25 @@ class Agent(object):
                         self.constants['team']]
 
         self.commands = []
-        #print('Obstacles')
-        #print('\n'.join('{}: {}'.format(*k) for k in enumerate(self.bzrc.get_obstacles())))
-        #print('\n'.join('{}: {}'.format(*k) for k in enumerate(self.constants)))
 
         #for tank in mytanks:
-        #    self.attack_enemies(tank)
+        #    self.do_move(tank)
+
+        # Use only two tanks for demo
+        # IMPORTANT: Using lots of tanks will slow them down to the point
+        # of making their PD controllers nearly useless!
         tank = mytanks[0]
-        self.attack_enemies(tank)
+        self.do_move(tank)
+        tank = mytanks[1]
+        self.do_move(tank)
 
         results = self.bzrc.do_commands(self.commands)
 
-    def attack_enemies(self, tank):
-        """Find the closest enemy and chase it, shooting as you go."""
+    def do_move(self, tank):
+        """Compute and follow the potential field vector"""
         print(self.get_potential_field_vector(tank))
         v, theta = self.get_potential_field_vector(tank)
         self.commands.append(self.pd_controller_move(tank, v, theta))
-        '''best_enemy = None
-        best_dist = 2 * float(self.constants['worldsize'])
-        for enemy in self.enemies:
-            if enemy.status != 'alive':
-                continue
-            dist = math.sqrt((enemy.x - tank.x)**2 + (enemy.y - tank.y)**2)
-            if dist < best_dist:
-                best_dist = dist
-                best_enemy = enemy
-        if best_enemy is None:
-            command = Command(tank.index, 0, 0, False)
-            self.commands.append(command)
-        else:
-            self.move_to_position(tank, best_enemy.x, best_enemy.y)'''
 
     def move_to_position(self, tank, target_x, target_y):
         """Set command to move to given coordinates."""
@@ -111,11 +96,17 @@ class Agent(object):
 
     ############################################################
 
-    def get_potential_field_vector(self, tank):
-        # Attractive field
+    # Compute the potential field at the tank's position by summing all fields
+    # that influence it. Outputs a vector (target_speed, target_angle)
+    def get_potential_field_vector(self, tank):        
+        delta_x = 0
+        delta_y = 0
+        
+        # Attractive field  
+        attractive_force = 25
         goal_found = False
-        goal_x = -1
-        goal_y = -1
+        goal_x = 0
+        goal_y = 0
         #print ("Tank has flag? ")
         #print (tank.flag)
         if tank.flag == '-':
@@ -132,17 +123,45 @@ class Agent(object):
                 if base.color == self.constants['team']:
                     goal_x = (base.corner1_x + base.corner2_x + base.corner3_x + base.corner4_x) /4
                     goal_y = (base.corner1_y + base.corner2_y + base.corner3_y + base.corner4_y) /4
-        delta_x = 1.5 * (goal_x - tank.x)
-        delta_y = 1.5 * (goal_y - tank.y)
-        
-        # Bound the influence of the goal
         dist = math.sqrt((goal_x - tank.x)**2 + (goal_y - tank.y)**2)
+        angle = math.atan2((goal_y - tank.y), (goal_x - tank.x))
+        
+        # Bound the influence of the goal to 1 * attractive_force
         if dist > self.max_dist_to_obstacle:
-            delta_x = delta_x * self.max_dist_to_obstacle / dist
-            delta_y = delta_y * self.max_dist_to_obstacle / dist
-        
-        # Repulsive field
-        
+            delta_x += attractive_force * math.cos(angle)
+            delta_y += attractive_force * math.sin(angle)
+        else:
+            delta_x += attractive_force * dist * math.cos(angle) / self.max_dist_to_obstacle
+            delta_y += attractive_force * dist * math.sin(angle) / self.max_dist_to_obstacle
+        print("Attractive force: ", math.sqrt(delta_x**2 + delta_y**2))
+    
+        # Repulsive fields
+        repulsive_force = 25
+        relative_corner_influence = 0.75
+        for obstacle in self.bzrc.get_obstacles():
+            center_x = 0 
+            center_y = 0
+            for point in obstacle:
+                center_x = center_x + point[0]
+                center_y = center_y + point[1]
+                # Include the corner point
+                dist = math.sqrt((point[0] - tank.x)**2 + (point[1] - tank.y)**2)
+                angle = math.atan2((point[1] - tank.y), (point[0] - tank.x))
+                if dist <= self.max_dist_to_obstacle * relative_corner_influence: # corner points have less influence than centroids
+                    delta_x += -repulsive_force * (relative_corner_influence * self.max_dist_to_obstacle - dist)**1 * math.cos(angle) / (relative_corner_influence * self.max_dist_to_obstacle)
+                    delta_y += -repulsive_force * (relative_corner_influence * self.max_dist_to_obstacle - dist)**1 * math.sin(angle) / (relative_corner_influence * self.max_dist_to_obstacle)
+
+            center_x = center_x / len(obstacle)
+            center_y = center_y / len(obstacle)
+            #print ("Centroid: ", center_x, ", ", center_y)
+            dist = math.sqrt((center_x - tank.x)**2 + (center_y - tank.y)**2)
+            angle = math.atan2((center_y - tank.y), (center_x - tank.x))
+            if dist < self.max_dist_to_obstacle:
+                delta_x += -repulsive_force * (self.max_dist_to_obstacle - dist) * math.cos(angle) / self.max_dist_to_obstacle
+                delta_y += -repulsive_force * (self.max_dist_to_obstacle - dist) * math.sin(angle) / self.max_dist_to_obstacle
+
+        # Tangential fields
+        tangential_force = 25
         for obstacle in self.bzrc.get_obstacles():
             center_x = 0 
             center_y = 0
@@ -150,58 +169,30 @@ class Agent(object):
                 center_x = center_x + point[0]
                 center_y = center_y + point[1]
                 dist = math.sqrt((point[0] - tank.x)**2 + (point[1] - tank.y)**2)
-                #dist = min(abs(center_x - tank.x), abs(center_y - tank.y)) 
-                if dist < self.max_dist_to_obstacle:
-                    delta_x = delta_x + .1 * (self.max_dist_to_obstacle - (point[0] - tank.x))
-                    delta_y = delta_y + .1 * (self.max_dist_to_obstacle - (point[1] - tank.y))                
-                #print (point)
-            center_x = center_x / len(obstacle)
-            center_y = center_y / len(obstacle)
-            #print ("Centroid: ", center_x, ", ", center_y)
-            dist = math.sqrt((center_x - tank.x)**2 + (center_y - tank.y)**2)
-            #dist = min(abs(center_x - tank.x), abs(center_y - tank.y)) 
-            if dist < self.max_dist_to_obstacle:
-                delta_x = delta_x + .1 * (self.max_dist_to_obstacle - (center_x - tank.x))
-                delta_y = delta_y + .1 * (self.max_dist_to_obstacle - (center_y - tank.y))
-        
-            '''dist = math.sqrt((center_x - tank.x)**2 + (center_y - tank.y)**2)
-            angle = math.atan2((center_x - tank.x), (center_y - tank.y))
-            angle = angle + math.pi / 8
-            angle = self.normalize_angle(angle)
-            force = self.max_dist_to_obstacle/2 - dist
-            if dist < self.max_dist_to_obstacle/2:
-                delta_x = delta_x + .5 * math.sin(angle) * force
-                delta_y = delta_y + .5 * math.cos(angle) * force'''
+                angle = math.atan2((point[1] - tank.y), (point[0] - tank.x))
+                angle += math.pi / 2
+                if dist < self.max_dist_to_obstacle * relative_corner_influence:
+                    delta_x += -tangential_force * dist * math.cos(angle) / (self.max_dist_to_obstacle * relative_corner_influence)
+                    delta_y += -tangential_force * dist * math.sin(angle) / (self.max_dist_to_obstacle * relative_corner_influence)
             
-                
-        # Tangential field
-        
-        for obstacle in self.bzrc.get_obstacles():
-            center_x = 0 
-            center_y = 0
-            for point in obstacle:
-                center_x = center_x + point[0]
-                center_y = center_y + point[1]
             center_x = center_x / len(obstacle)
             center_y = center_y / len(obstacle)
             
             dist = math.sqrt((center_x - tank.x)**2 + (center_y - tank.y)**2)
-            angle = math.atan2((point[0] - center_x), (point[1] - center_y))
-            angle = angle + math.pi / 2
-            angle = self.normalize_angle(angle)
-            force = self.max_dist_to_obstacle - dist
+            angle = math.atan2((center_y - tank.y), (center_x - tank.x))
+            angle += math.pi / 2
             if dist < self.max_dist_to_obstacle:
-                delta_x = delta_x - 1 * math.cos(angle) #* force
-                delta_y = delta_y - 1 * math.sin(angle) #* force
-                    
+                delta_x += -tangential_force * math.cos(angle)
+                delta_y += -tangential_force * math.sin(angle)
                 
-        
         # Compute final vector
         v = min(math.sqrt(delta_x**2 + delta_y**2), float(self.constants['tankspeed']))
         theta = math.atan2(delta_y, delta_x)
         relative_theta = self.normalize_angle(theta)
         return (v, relative_theta) # v is goal vector of velocity and relative_theta is goal angle
-        
+    
+    # Perform the actual update of the tank's controls using the target speed
+    # and target angle. Uses a PD controller to minimize the error.
     def pd_controller_move(self, tank, target_speed, target_angle):
         tank_speed = math.sqrt(tank.vx**2 + tank.vy**2)
 
@@ -230,6 +221,9 @@ class Agent(object):
         
         shoot = False #(Is there an enemy tank in front of us? Can we avoid shooting our own?)
         # TODO: shoot periodically using the simple metric, closest tank at angle theta is enemy tank?
+        if abs(speed_error) > 1: # There may be something blocking the tank
+            shoot = True
+        
         narrow_angle = math.pi / 2
         for enemy in self.enemies:
             if enemy.status != 'alive':
@@ -243,7 +237,8 @@ class Agent(object):
         new_angvel = self.normalize_angle(new_angvel)
         command = Command(tank.index, new_speed + tank_speed, new_angvel, shoot)
         return command
-       
+    
+    # Return the closest enemy flag
     def get_closest_flag(self, tank):
         closest_flag = None
         best_dist = 2 * float(self.constants['worldsize'])
