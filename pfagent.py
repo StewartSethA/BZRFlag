@@ -44,11 +44,11 @@ class Agent(object):
         
         # FROBBING CENTRAL:
         self.k_pa = 1 # angular velocity constant
-        self.k_da = .1 # angular velocity derivative constant
+        self.k_da = 1 # angular velocity derivative constant
         self.k_ps = 1 # speed proportional control constant
-        self.k_ds = -0.5 # speed proportional derivative control constant
+        self.k_ds = 1 # speed proportional derivative control constant
         
-        self.max_dist_to_obstacle = 80
+        self.max_dist_to_obstacle = 90
 
     def tick(self, time_diff):
         """Some time has passed; decide what to do next."""
@@ -132,8 +132,8 @@ class Agent(object):
                 if base.color == self.constants['team']:
                     goal_x = (base.corner1_x + base.corner2_x + base.corner3_x + base.corner4_x) /4
                     goal_y = (base.corner1_y + base.corner2_y + base.corner3_y + base.corner4_y) /4
-        delta_x = goal_x - tank.x
-        delta_y = goal_y - tank.y
+        delta_x = 1.5 * (goal_x - tank.x)
+        delta_y = 1.5 * (goal_y - tank.y)
         
         # Bound the influence of the goal
         dist = math.sqrt((goal_x - tank.x)**2 + (goal_y - tank.y)**2)
@@ -147,19 +147,13 @@ class Agent(object):
             center_x = 0 
             center_y = 0
             for point in obstacle:
-                center_x = point[0]
-                center_1 = point[1]
-                dist = math.sqrt((center_x - tank.x)**2 + (center_y - tank.y)**2)
-				#dist = min(abs(center_x - tank.x), abs(center_y - tank.y)) 
-                if dist < self.max_dist_to_obstacle:
-                    delta_x = delta_x + 0.5 * self.max_dist_to_obstacle - (center_x - tank.x)
-                    delta_y = delta_y + 0.5 * self.max_dist_to_obstacle - (center_y - tank.y)
-#				dist = min(abs(point[0] - tank.x), abs(point[1] - tank.y)) 
-#				if dist < self.max_dist_to_obstacle:
-#					delta_x = delta_x - self.max_dist_to_obstacle - (point[0] - tank.x)
-#					delta_y = delta_y - self.max_dist_to_obstacle - (point[1] - tank.y)
                 center_x = center_x + point[0]
                 center_y = center_y + point[1]
+                dist = math.sqrt((point[0] - tank.x)**2 + (point[1] - tank.y)**2)
+                #dist = min(abs(center_x - tank.x), abs(center_y - tank.y)) 
+                if dist < self.max_dist_to_obstacle:
+                    delta_x = delta_x + .1 * (self.max_dist_to_obstacle - (point[0] - tank.x))
+                    delta_y = delta_y + .1 * (self.max_dist_to_obstacle - (point[1] - tank.y))                
                 #print (point)
             center_x = center_x / len(obstacle)
             center_y = center_y / len(obstacle)
@@ -167,8 +161,39 @@ class Agent(object):
             dist = math.sqrt((center_x - tank.x)**2 + (center_y - tank.y)**2)
             #dist = min(abs(center_x - tank.x), abs(center_y - tank.y)) 
             if dist < self.max_dist_to_obstacle:
-                delta_x = delta_x + self.max_dist_to_obstacle - (center_x - tank.x)
-                delta_y = delta_y + self.max_dist_to_obstacle - (center_y - tank.y)
+                delta_x = delta_x + .1 * (self.max_dist_to_obstacle - (center_x - tank.x))
+                delta_y = delta_y + .1 * (self.max_dist_to_obstacle - (center_y - tank.y))
+        
+            '''dist = math.sqrt((center_x - tank.x)**2 + (center_y - tank.y)**2)
+            angle = math.atan2((center_x - tank.x), (center_y - tank.y))
+            angle = angle + math.pi / 8
+            angle = self.normalize_angle(angle)
+            force = self.max_dist_to_obstacle/2 - dist
+            if dist < self.max_dist_to_obstacle/2:
+                delta_x = delta_x + .5 * math.sin(angle) * force
+                delta_y = delta_y + .5 * math.cos(angle) * force'''
+            
+                
+        # Tangential field
+        
+        for obstacle in self.bzrc.get_obstacles():
+            center_x = 0 
+            center_y = 0
+            for point in obstacle:
+                center_x = center_x + point[0]
+                center_y = center_y + point[1]
+            center_x = center_x / len(obstacle)
+            center_y = center_y / len(obstacle)
+            
+            dist = math.sqrt((center_x - tank.x)**2 + (center_y - tank.y)**2)
+            angle = math.atan2((point[0] - center_x), (point[1] - center_y))
+            angle = angle + math.pi / 2
+            angle = self.normalize_angle(angle)
+            force = self.max_dist_to_obstacle - dist
+            if dist < self.max_dist_to_obstacle:
+                delta_x = delta_x - 1 * math.cos(angle) #* force
+                delta_y = delta_y - 1 * math.sin(angle) #* force
+                    
                 
         
         # Compute final vector
@@ -189,15 +214,15 @@ class Agent(object):
         angle_error = self.normalize_angle(angle_error)
         delta_angle_error = angle_error - last_angle_error # for the derivative portion of the controller
         delta_angle_error = self.normalize_angle(delta_angle_error)
-        #print ("Angle error: ", angle_error)
-        #print ("Change in angle error: ", delta_angle_error)
+        print ("Angle error: ", angle_error)
+        print ("Change in angle error: ", delta_angle_error)
         last_angle_error = angle_error # update the tank's last angle error so we can computer its derivative on our next cycle
         new_angvel = self.k_pa * angle_error + self.k_da * delta_angle_error # determine the new angular velocity
         
         speed_error = target_speed - tank_speed
         delta_speed_error = speed_error - last_speed_error
-        #print ("Speed error: ", speed_error)
-        #print ("Change in speed error: ", delta_speed_error)
+        print ("Speed error: ", speed_error)
+        print ("Change in speed error: ", delta_speed_error)
         last_speed_error = speed_error # update our last speed error so we can computer its derivative on our next cycle
         new_speed = self.k_ps * speed_error + self.k_ds * delta_speed_error
         
@@ -205,7 +230,7 @@ class Agent(object):
         
         shoot = False #(Is there an enemy tank in front of us? Can we avoid shooting our own?)
         # TODO: shoot periodically using the simple metric, closest tank at angle theta is enemy tank?
-        narrow_angle = 0.2
+        narrow_angle = math.pi / 2
         for enemy in self.enemies:
             if enemy.status != 'alive':
                 continue
